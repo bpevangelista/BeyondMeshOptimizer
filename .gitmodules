@@ -1,0 +1,3 @@
+[submodule "dependencies/EvangelistaFW"]
+	path = dependencies/EvangelistaFW
+	url = https://github.com/bpevangelista/EvangelistaFramework.git
