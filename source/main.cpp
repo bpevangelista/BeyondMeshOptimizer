@@ -1,4 +1,5 @@
 #include "Foundation\efwPlatform.h"
+#include "Foundation\efwMemory.h"
 #include "Foundation\efwConsole.h"
 #include "Foundation\efwPathHelper.h"
 #include "Graphics\efwUnprocessedTriMeshHelper.h"
@@ -79,16 +80,43 @@ int32_t materialCount;
 
 // ----
 
-struct MeshEvdBinary
+namespace VertexFormatEvdBinary
 {
-	int32_t materialId;
-	int32_t vertexFormat;
-	int32_t vertexCount;
-	int32_t indexCount;
+	enum VertexFormat
+	{
+		kU16,
+		kS16,
+		kU16Norm,
+		kS16Norm,
+		kFloat32,
+		kFloat16
+	};
+}
+
+EFW_PACKED_BEGIN struct VertexAttributeEvdBinary
+{
+	uint8_t dataFormat;					// F16/F32/S16/U16/U8 Specials:X10Y11Z11
+	uint8_t dataOffset;
+	uint8_t componentCount;				// 1/2/3/4
+	uint8_t inputBufferSlot;			// 0..15
+} EFW_PACKED_END;
+
+EFW_PACKED_BEGIN struct MeshEvdBinary
+{
+	Guid materialGuid;
+
+	uint32_t vertexAttributeCount;
+	VertexAttributeEvdBinary vertexAttributes[16];
+
+	uint16_t vertexStride;
+	uint16_t vertexCount;
+	uint32_t indexCount;
 
 	float positionScaleBias[6];
 	float uvScaleBias[4];
-};
+
+} EFW_PACKED_END;
+
 
 struct ModelEvdBinary
 {
@@ -109,8 +137,8 @@ struct MaterialEvdBinary
 {
 	TextureEvdBinary albedoTexture;
 	TextureEvdBinary normalMapTexture;
-	float fresnel0;
 	float roughness;
+	float fresnel0[3];
 };
 
 struct MaterialLibEvdBinary
@@ -134,11 +162,12 @@ void WriteModelDescToJson(const char* outputTextFilePath, const char* outputBina
 
 	//const char kJsonBegin[] = "{\"meshes\":[\r\n";
 	//const char kJsonEnd[] = "]};";
-	const char kJsonBegin[] = "package:{\n";
-	const char kJsonEnd[] = "}";
+	const char kJsonBegin[] = "[\n";
+	const char kJsonEnd[] = "]";
 
 	// Start
-	fwrite(&model->meshCount, sizeof(model->meshCount), 1, binaryFile);
+	int32_t totalMeshcount = model->meshCount - skipSet.size();
+	fwrite(&totalMeshcount, 1, sizeof(totalMeshcount), binaryFile);
 	fwrite(kJsonBegin, sizeof(char), strlen(kJsonBegin), textFile);
 
 	const int32_t kMaxBufferSize = 1 * 1024 * 1024;
@@ -149,7 +178,7 @@ void WriteModelDescToJson(const char* outputTextFilePath, const char* outputBina
 	memset(buffer, 0, sizeof(char) * kMaxBufferSize);
 
 	// Mesh
-	for (int i=0; i<model->meshCount; ++i)
+	for (uint32_t i=0; i<model->meshCount; ++i)
 	{
 		if (skipSet.find(i) != skipSet.end())
 			continue;
@@ -165,12 +194,12 @@ void WriteModelDescToJson(const char* outputTextFilePath, const char* outputBina
 
 		// Custom data
 		const int32_t kCustomUserDataCount = 10;
+		float* userDataAsFloat = (float*)mesh.customUserData;
 		char userValuesStr[kCustomUserDataCount][512];
 		memset(userValuesStr, 0, kCustomUserDataCount * 512);
 
 		if (mesh.customUserData != NULL)
 		{
-			float* userDataAsFloat = (float*)mesh.customUserData;
 			for (int32_t j=0; j<kCustomUserDataCount; ++j)
 			{
 				if (userDataAsFloat[j] == ((int32_t)userDataAsFloat[j]) )
@@ -186,11 +215,11 @@ void WriteModelDescToJson(const char* outputTextFilePath, const char* outputBina
 
 		int32_t writtenBytes = sprintf(&buffer[bufferIndex],
 			"{"
-			"\"matId\":%d,"
+			"\"matId\":%llu,"
 			"\"vformat\":%d,"
 			"\"vcount\":%d,"
 			"\"icount\":%d",
-			mesh.materialId,
+			mesh.guid,
 			
 			// TODO: HACK: TODOBE Improve
 			// Position, tangentFrame, color0, color1, uv0, uv1, uv2, uv3
@@ -202,16 +231,36 @@ void WriteModelDescToJson(const char* outputTextFilePath, const char* outputBina
 			bufferIndex += writtenBytes;
 
 		//
+		int value1 = sizeof(MeshEvdBinary);
 		MeshEvdBinary meshBinary;
-		meshBinary.materialId = mesh.materialId;
-		meshBinary.vertexFormat = ((1 << 0) | (3 << 1) | (0 << 3) | (0 << 4) | (1 << 5) | (0 << 6) | (0 << 7) | (0 << 8) );
+		memset(&meshBinary, 0, sizeof(MeshEvdBinary));
+		meshBinary.materialGuid = mesh.materialGuid;
+		
+		meshBinary.vertexAttributeCount = 3;
+		meshBinary.vertexAttributes[0].componentCount = 3;
+		meshBinary.vertexAttributes[0].dataFormat = VertexFormatEvdBinary::kU16Norm;
+		meshBinary.vertexAttributes[0].dataOffset = 0;
+		meshBinary.vertexAttributes[0].inputBufferSlot = 0;
+		
+		meshBinary.vertexAttributes[1].componentCount = 2;
+		meshBinary.vertexAttributes[1].dataFormat = VertexFormatEvdBinary::kU16Norm;
+		meshBinary.vertexAttributes[1].dataOffset = 3 * sizeof(uint16_t);
+		meshBinary.vertexAttributes[1].inputBufferSlot = 1;
+
+		meshBinary.vertexAttributes[2].componentCount = 2;
+		meshBinary.vertexAttributes[2].dataFormat = VertexFormatEvdBinary::kU16Norm;
+		meshBinary.vertexAttributes[2].dataOffset = (3+2) * sizeof(uint16_t);
+		meshBinary.vertexAttributes[2].inputBufferSlot = 2;
+
+		meshBinary.vertexStride = (3+2+2) * sizeof(uint16_t);
 		meshBinary.vertexCount = mesh.vertexCount;
+
 		meshBinary.indexCount = mesh.indexCount;
 
 		if (mesh.customUserData != NULL)
 		{
-			memcpy(&meshBinary.positionScaleBias, userValuesStr[0], sizeof(float) * 6);
-			memcpy(&meshBinary.uvScaleBias, userValuesStr[6], sizeof(float) * 4);
+			memcpy(&meshBinary.positionScaleBias, &userDataAsFloat[0], sizeof(float) * 6);
+			memcpy(&meshBinary.uvScaleBias, &userDataAsFloat[6], sizeof(float) * 4);
 
 			writtenBytes = sprintf(&buffer[bufferIndex],
 				",\"posCustom\":[%s,%s,%s,%s,%s,%s],"
@@ -224,7 +273,7 @@ void WriteModelDescToJson(const char* outputTextFilePath, const char* outputBina
 		}
 
 		//
-		fwrite(&meshBinary, sizeof(meshBinary), 1, binaryFile);
+		fwrite(&meshBinary, 1, sizeof(meshBinary), binaryFile);
 
 		if (i < (model->meshCount-1))
 		{
@@ -299,25 +348,29 @@ void WriteMaterialDescToJson(const char* outputTextFilePath, const char* outputB
 
 		//max(1, width / 4) x max(1, height / 4) x 8(DXT1) or 16(DXT2-5)
 		MaterialEvdBinary materialBinary;
-		
+		memset(&materialBinary, 0, sizeof(MaterialEvdBinary));
+		materialBinary.roughness = kDefaultRoughness;
+		memcpy(&materialBinary.fresnel0, kDefaultFresnel0, sizeof(float) * 3);
 
 		// Has albedo texture
 		if (!skipMaterial && material.albedoTexture != NULL)
 		{
+			const TextureDesc& textureDesc = material.albedoTexture->desc;
+
 			writtenBytes = sprintf(&buffer[bufferIndex],
 				"\"albedoTexture\":{\"width\":%d,\"height\":%d,\"mipCount\":%d,\"format\":%d,\"size\":%d},",
-				material.albedoTexture->desc.width,
-				material.albedoTexture->desc.height,
-				material.albedoTexture->desc.mipCount,
-				material.albedoTexture->desc.format,
-				material.albedoTexture->dataSize
+				textureDesc.width,
+				textureDesc.height,
+				textureDesc.mipCount,
+				textureDesc.format,
+				(uint32_t)material.albedoTexture->dataSize
 				);
 
 			materialBinary.albedoTexture.width = material.albedoTexture->desc.width;
 			materialBinary.albedoTexture.height = material.albedoTexture->desc.height;
 			materialBinary.albedoTexture.mipCount = material.albedoTexture->desc.mipCount;
 			materialBinary.albedoTexture.format = material.albedoTexture->desc.format;
-			materialBinary.albedoTexture.sizeInBytes = material.albedoTexture->dataSize;
+			materialBinary.albedoTexture.sizeInBytes = (uint32_t)material.albedoTexture->dataSize;
 		}
 		else
 		{
@@ -345,8 +398,6 @@ void WriteMaterialDescToJson(const char* outputTextFilePath, const char* outputB
 			bufferIndex += writtenBytes;
 
 		//
-		memcpy(&materialBinary.fresnel0, &kDefaultFresnel0[0], sizeof(float) * 3);
-		materialBinary.roughness = kDefaultRoughness;
 		fwrite(&materialBinary, sizeof(materialBinary), 1, binaryFile);
 
 		writtenBytes = 
@@ -384,7 +435,7 @@ void WriteModelDataToBinary(const char* outputFileName, UnprocessedTriModel* mod
 
 	uint8_t pad[] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
 	size_t writtenBytes = 0;
-	for (int i=0; i<model->meshCount; ++i)
+	for (uint32_t i=0; i<model->meshCount; ++i)
 	{
 		if (skipSet.find(i) != skipSet.end())
 			continue;
@@ -401,7 +452,7 @@ void WriteModelDataToBinary(const char* outputFileName, UnprocessedTriModel* mod
 		writtenBytes += fwrite(mesh.vertexData, 1, mesh.vertexCount*mesh.vertexStride, file);
 		
 		uint16_t* newIndexData = (uint16_t*)memalign(16, mesh.indexCount * sizeof(uint16_t));
-		for (int j=0; j<mesh.indexCount; ++j)
+		for (uint32_t j=0; j<mesh.indexCount; ++j)
 		{
 			newIndexData[j] = (uint16_t)((uint32_t*)mesh.indexData)[j];
 		}
@@ -449,7 +500,7 @@ void WriteMaterialDataToBinary(const char* outputFileName, UnprocessedMaterialLi
 		if (material.albedoTexture != NULL)
 		{
 			const Texture& texture = *material.albedoTexture;
-			int32_t writtenBytes = fwrite(texture.data, 1, texture.dataSize, file);
+			int32_t writtenBytes = fwrite(texture.data, 1, (size_t)texture.dataSize, file);
 			totalWrittenBytes += writtenBytes;
 
 			EFW_ASSERT(writtenBytes == texture.dataSize);
@@ -554,7 +605,7 @@ int main2(int argc, char* argv[])
 
 int main(int argc, char* argv[])
 {
-	Console::SetWriteMask(0);
+	//Console::SetWriteMask(0);
 
 	const char* kFileName = "assets\\sponza\\sponza.obj";
 	//const char* kFileName = "assets\\bun_zipper_res2.obj";
@@ -567,7 +618,6 @@ int main(int argc, char* argv[])
 	std::set<int32_t> modelSkipSet;
 	std::set<int32_t> materialSkipSet;
 	modelSkipSet.insert(3);
-	materialSkipSet.insert(model->meshes[3].materialId);
 
 	// Write uncompressed models
 	WriteModelDescToJson("sponza-meshes.evd", "sponza-meshes.evdb", model, modelSkipSet);
@@ -578,7 +628,7 @@ int main(int argc, char* argv[])
 	//for (int32_t i=0; i<model->meshCount; ++i)
 	//	UnprocessedTriMeshHelper::MergeDuplicatedVertices(&model->meshes[i], 1.0f, 
 	//	MergeVertexFlags::kTangentPlane_Average|MergeVertexFlags::kUvw0_Exact);
-	for (int32_t i=0; i<model->meshCount; ++i)
+	for (uint32_t i=0; i<model->meshCount; ++i)
 	{
 		UnprocessedTriMesh& mesh = model->meshes[i];
 
@@ -616,7 +666,7 @@ int main(int argc, char* argv[])
 		uint8_t* newVertexData = (uint8_t*)memalign(16, newVertexStride*mesh.vertexCount);
 		uint8_t* dataDst = (uint8_t*)newVertexData;
 		
-		for (int32_t j=0; j<mesh.vertexCount; ++j)
+		for (uint32_t j=0; j<mesh.vertexCount; ++j)
 		{
 			memcpy(dataDst, newPositionData, newPositionSize);
 			dataDst += newPositionSize;
