@@ -101,12 +101,16 @@ EFW_PACKED_BEGIN struct VertexAttributeEvdBinary
 	uint8_t inputBufferSlot;			// 0..15
 } EFW_PACKED_END;
 
-EFW_PACKED_BEGIN struct MeshEvdBinary
-{
-	Guid materialGuid;
 
-	uint32_t vertexAttributeCount;
+struct MeshEvdBinary
+{
+	//Guid materialGuid;
+	uint64_t hash64;
+	uint64_t materialHash64;
+
 	VertexAttributeEvdBinary vertexAttributes[16];
+	uint16_t vertexAttributeCount;
+	uint8_t _pad0[2];
 
 	uint16_t vertexStride;
 	uint16_t vertexCount;
@@ -114,15 +118,19 @@ EFW_PACKED_BEGIN struct MeshEvdBinary
 
 	float positionScaleBias[6];
 	float uvScaleBias[4];
-
-} EFW_PACKED_END;
+};
+// Mesh size must be a multiple of 8. Add padding if necessary
+EFW_STATIC_ASSERT(sizeof(MeshEvdBinary) % 8 == 0);
 
 
 struct ModelEvdBinary
 {
 	int32_t meshCount;
+	uint8_t _pad0[4];
+
 	MeshEvdBinary meshes[];
 };
+
 
 struct TextureEvdBinary
 {
@@ -133,13 +141,18 @@ struct TextureEvdBinary
 	uint32_t sizeInBytes;
 };
 
+
 struct MaterialEvdBinary
 {
+	//Guid guid;
+	uint64_t hash64;
+
 	TextureEvdBinary albedoTexture;
 	TextureEvdBinary normalMapTexture;
 	float roughness;
 	float fresnel0[3];
 };
+
 
 struct MaterialLibEvdBinary
 {
@@ -160,10 +173,8 @@ void WriteModelDescToJson(const char* outputTextFilePath, const char* outputBina
 		return;
 	}
 
-	//const char kJsonBegin[] = "{\"meshes\":[\r\n";
-	//const char kJsonEnd[] = "]};";
-	const char kJsonBegin[] = "[\n";
-	const char kJsonEnd[] = "]";
+	const char kJsonBegin[] = "{\n\"id\":\"EfwPkg\",\n\"v\":\"0.9.0\",\n\"meshes\":{\n";
+	const char kJsonEnd[] = "}\n\"materials\":{\n}\n}";
 
 	// Start
 	int32_t totalMeshcount = model->meshCount - skipSet.size();
@@ -214,12 +225,14 @@ void WriteModelDescToJson(const char* outputTextFilePath, const char* outputBina
 		}
 
 		int32_t writtenBytes = sprintf(&buffer[bufferIndex],
-			"{"
-			"\"matId\":%llu,"
+			"\"%s\":{"
+			"\"mat\":%s,"
 			"\"vformat\":%d,"
 			"\"vcount\":%d,"
 			"\"icount\":%d",
-			mesh.guid,
+			
+			mesh.guid.GetName(),
+			mesh.materialGuid.GetName(),
 			
 			// TODO: HACK: TODOBE Improve
 			// Position, tangentFrame, color0, color1, uv0, uv1, uv2, uv3
@@ -231,10 +244,11 @@ void WriteModelDescToJson(const char* outputTextFilePath, const char* outputBina
 			bufferIndex += writtenBytes;
 
 		//
-		int value1 = sizeof(MeshEvdBinary);
+		//int value1 = sizeof(MeshEvdBinary);
 		MeshEvdBinary meshBinary;
 		memset(&meshBinary, 0, sizeof(MeshEvdBinary));
-		meshBinary.materialGuid = mesh.materialGuid;
+		meshBinary.hash64 = mesh.guid.hash64;
+		meshBinary.materialHash64 = mesh.materialGuid.hash64;
 		
 		meshBinary.vertexAttributeCount = 3;
 		meshBinary.vertexAttributes[0].componentCount = 3;
@@ -314,8 +328,8 @@ void WriteMaterialDescToJson(const char* outputTextFilePath, const char* outputB
 	
 	float kDefaultRoughness = 0.2f;
 
-	const char kJsonBegin[] = "[\n";
-	const char kJsonEnd[] = "]";
+	const char kJsonBegin[] = "{\n\"id\":\"EfwPkg\",\n\"v\":\"0.9.0\",\n\"meshes\":{\n}\n\"materials\":{\n";
+	const char kJsonEnd[] = "}\n}";
 
 	//
 	fwrite(&materialLib->materialCount, sizeof(materialLib->materialCount), 1, binaryFile);
@@ -344,11 +358,15 @@ void WriteMaterialDescToJson(const char* outputTextFilePath, const char* outputB
 
 		// Start material
 		int32_t writtenBytes = 0;
-		buffer[bufferIndex++] = '{';
+		writtenBytes = sprintf(&buffer[bufferIndex], "\"%s\":{", material.guid.GetName() );
+		if (writtenBytes > 0)
+			bufferIndex += writtenBytes;
 
 		//max(1, width / 4) x max(1, height / 4) x 8(DXT1) or 16(DXT2-5)
 		MaterialEvdBinary materialBinary;
 		memset(&materialBinary, 0, sizeof(MaterialEvdBinary));
+		
+		materialBinary.hash64 = material.guid.hash64;
 		materialBinary.roughness = kDefaultRoughness;
 		memcpy(&materialBinary.fresnel0, kDefaultFresnel0, sizeof(float) * 3);
 
@@ -620,8 +638,8 @@ int main(int argc, char* argv[])
 	modelSkipSet.insert(3);
 
 	// Write uncompressed models
-	WriteModelDescToJson("sponza-meshes.evd", "sponza-meshes.evdb", model, modelSkipSet);
-	WriteModelDataToBinary("sponza-meshes.evb", model, modelSkipSet);
+	WriteModelDescToJson("assets_output/sponza-meshes.evd", "assets_output/sponza-meshes.evdb", model, modelSkipSet);
+	WriteModelDataToBinary("assets_output/sponza-meshes.evb", model, modelSkipSet);
 
 	// Compress mesh data
 #if 1
@@ -693,19 +711,24 @@ int main(int argc, char* argv[])
 #endif
 
 	// Write compressed models
-	WriteModelDescToJson("sponza-compressed3-meshes.evd", "sponza-compressed3-meshes.evdb", model, modelSkipSet);
-	WriteModelDataToBinary("sponza-compressed3-meshes.evb", model, modelSkipSet);
+	WriteModelDescToJson("assets_output/sponza-compressed3-meshes.evd", "assets_output/sponza-compressed3-meshes.evdb", model, modelSkipSet);
+	WriteModelDataToBinary("assets_output/sponza-compressed3-meshes.evb", model, modelSkipSet);
 
 	// Write material data
-	WriteMaterialDescToJson("sponza-materials.evd", "sponza-materials.evdb", materialLib, materialSkipSet);
-	WriteMaterialDataToBinary("sponza-materials.evb", materialLib, materialSkipSet);
+	WriteMaterialDescToJson("assets_output/sponza-materials.evd", "assets_output/sponza-materials.evdb", materialLib, materialSkipSet);
+	WriteMaterialDataToBinary("assets_output/sponza-materials.evb", materialLib, materialSkipSet);
 	
 	// Compress material data
 	ConverMaterialData(materialLib);
-	WriteMaterialDescToJson("sponza-compressed-materials.evd", "sponza-compressed-materials.evdb", materialLib, materialSkipSet);
-	WriteMaterialDataToBinary("sponza-compressed-materials.evb", materialLib, materialSkipSet);
+	WriteMaterialDescToJson("assets_output/sponza-compressed-materials.evd", "assets_output/sponza-compressed-materials.evdb", materialLib, materialSkipSet);
+	WriteMaterialDataToBinary("assets_output/sponza-compressed-materials.evb", materialLib, materialSkipSet);
 	WavefrontObjReader::Release(materialLib);
 	WavefrontObjReader::Release(model);
+
+	//EvdBi
+	//FileReader::ReadAll(&
+
+
 
 	//uint16_t* positions = NULL;
 	//float* positionScales = NULL;
