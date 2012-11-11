@@ -82,24 +82,23 @@ int32_t materialCount;
 
 namespace VertexFormatEvdBinary
 {
-	enum VertexFormat
-	{
-		kU16,
-		kS16,
-		kU16Norm,
-		kS16Norm,
-		kFloat32,
-		kFloat16
-	};
+	const uint8_t kUnknown = 0;
+	const uint8_t kU16 = 1;
+	const uint8_t kS16 = 2;
+	const uint8_t kU16Norm = 3;
+	const uint8_t kS16Norm = 4;
+	const uint8_t kFloat32 = 5;
+	const uint8_t kFloat16 = 6;
 }
 
-EFW_PACKED_BEGIN struct VertexAttributeEvdBinary
+
+struct VertexAttributeEvdBinary
 {
 	uint8_t dataFormat;					// F16/F32/S16/U16/U8 Specials:X10Y11Z11
 	uint8_t dataOffset;
 	uint8_t componentCount;				// 1/2/3/4
 	uint8_t inputBufferSlot;			// 0..15
-} EFW_PACKED_END;
+};
 
 
 struct MeshEvdBinary
@@ -128,7 +127,7 @@ struct ModelEvdBinary
 	int32_t meshCount;
 	uint8_t _pad0[4];
 
-	MeshEvdBinary meshes[];
+	MeshEvdBinary meshes[0];
 };
 
 
@@ -157,7 +156,7 @@ struct MaterialEvdBinary
 struct MaterialLibEvdBinary
 {
 	int32_t materialCount;
-	MaterialEvdBinary materials[];
+	MaterialEvdBinary materials[0];
 };
 
 // ----
@@ -165,7 +164,7 @@ struct MaterialLibEvdBinary
 
 void WriteModelDescToJson(const char* outputTextFilePath, const char* outputBinaryFilePath, UnprocessedTriModel* model, std::set<int32_t> skipSet)
 {
-	FILE* binaryFile = fopen(outputBinaryFilePath, "w");
+	FILE* binaryFile = fopen(outputBinaryFilePath, "wb");
 	FILE* textFile = fopen(outputTextFilePath, "wt");
 	if (binaryFile == NULL || textFile == NULL)
 	{
@@ -177,8 +176,7 @@ void WriteModelDescToJson(const char* outputTextFilePath, const char* outputBina
 	const char kJsonEnd[] = "}\n\"materials\":{\n}\n}";
 
 	// Start
-	int32_t totalMeshcount = model->meshCount - skipSet.size();
-	fwrite(&totalMeshcount, 1, sizeof(totalMeshcount), binaryFile);
+	int32_t maxMeshcount = model->meshCount;
 	fwrite(kJsonBegin, sizeof(char), strlen(kJsonBegin), textFile);
 
 	const int32_t kMaxBufferSize = 1 * 1024 * 1024;
@@ -187,6 +185,13 @@ void WriteModelDescToJson(const char* outputTextFilePath, const char* outputBina
 	int32_t bufferIndex = 0;
 	char* buffer = (char*)memalign(16, kMaxBufferSize * sizeof(char));
 	memset(buffer, 0, sizeof(char) * kMaxBufferSize);
+
+	// Note that the total mesh count may be less than model->meshCount because of the skipSet
+	int32_t maxModelBinarySize = sizeof(ModelEvdBinary) + maxMeshcount * sizeof(MeshEvdBinary);
+	ModelEvdBinary* modelBinaryPtr = (ModelEvdBinary*)memalign(16, maxModelBinarySize);
+	memset(modelBinaryPtr, 0, maxModelBinarySize);
+	
+	ModelEvdBinary& modelBinary = *modelBinaryPtr;
 
 	// Mesh
 	for (uint32_t i=0; i<model->meshCount; ++i)
@@ -245,25 +250,26 @@ void WriteModelDescToJson(const char* outputTextFilePath, const char* outputBina
 
 		//
 		//int value1 = sizeof(MeshEvdBinary);
-		MeshEvdBinary meshBinary;
-		memset(&meshBinary, 0, sizeof(MeshEvdBinary));
+		MeshEvdBinary& meshBinary = modelBinary.meshes[modelBinary.meshCount];
+		modelBinary.meshCount++;
+
 		meshBinary.hash64 = mesh.guid.hash64;
 		meshBinary.materialHash64 = mesh.materialGuid.hash64;
 		
 		meshBinary.vertexAttributeCount = 3;
-		meshBinary.vertexAttributes[0].componentCount = 3;
 		meshBinary.vertexAttributes[0].dataFormat = VertexFormatEvdBinary::kU16Norm;
 		meshBinary.vertexAttributes[0].dataOffset = 0;
+		meshBinary.vertexAttributes[0].componentCount = 3;
 		meshBinary.vertexAttributes[0].inputBufferSlot = 0;
 		
-		meshBinary.vertexAttributes[1].componentCount = 2;
 		meshBinary.vertexAttributes[1].dataFormat = VertexFormatEvdBinary::kU16Norm;
 		meshBinary.vertexAttributes[1].dataOffset = 3 * sizeof(uint16_t);
+		meshBinary.vertexAttributes[1].componentCount = 2;
 		meshBinary.vertexAttributes[1].inputBufferSlot = 1;
 
-		meshBinary.vertexAttributes[2].componentCount = 2;
 		meshBinary.vertexAttributes[2].dataFormat = VertexFormatEvdBinary::kU16Norm;
 		meshBinary.vertexAttributes[2].dataOffset = (3+2) * sizeof(uint16_t);
+		meshBinary.vertexAttributes[2].componentCount = 2;
 		meshBinary.vertexAttributes[2].inputBufferSlot = 2;
 
 		meshBinary.vertexStride = (3+2+2) * sizeof(uint16_t);
@@ -286,9 +292,6 @@ void WriteModelDescToJson(const char* outputTextFilePath, const char* outputBina
 				bufferIndex += writtenBytes;
 		}
 
-		//
-		fwrite(&meshBinary, 1, sizeof(meshBinary), binaryFile);
-
 		if (i < (model->meshCount-1))
 		{
 			writtenBytes = sprintf(&buffer[bufferIndex], "},\n");
@@ -300,10 +303,14 @@ void WriteModelDescToJson(const char* outputTextFilePath, const char* outputBina
 		if (writtenBytes > 0)
 			bufferIndex += writtenBytes;
 	}
-	fwrite(buffer, sizeof(char), bufferIndex, textFile);
+
+	fwrite(buffer, 1, bufferIndex, textFile);
+	fwrite(kJsonEnd, 1, strlen(kJsonEnd), textFile);
 	EFW_SAFE_ALIGNED_FREE(buffer);
 
-	fwrite(kJsonEnd, sizeof(char), strlen(kJsonEnd), textFile);
+	fwrite(modelBinaryPtr, 1, sizeof(ModelEvdBinary) + modelBinary.meshCount * sizeof(MeshEvdBinary), binaryFile);
+	EFW_SAFE_ALIGNED_FREE(buffer);
+
 	fclose(textFile);
 	fclose(binaryFile);
 }
@@ -623,6 +630,7 @@ int main2(int argc, char* argv[])
 
 int main(int argc, char* argv[])
 {
+	//int value = sizeof(ModelEvdBinary);
 	//Console::SetWriteMask(0);
 
 	const char* kFileName = "assets\\sponza\\sponza.obj";
