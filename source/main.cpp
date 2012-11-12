@@ -172,7 +172,7 @@ void WriteModelDescToJson(const char* outputTextFilePath, const char* outputBina
 		return;
 	}
 
-	const char kJsonBegin[] = "{\n\"id\":\"EfwPkg\",\n\"v\":\"0.9.0\",\n\"meshes\":{\n";
+	const char kJsonBegin[] = "\"package\":{\n\"id\":\"EfwPkg\",\n\"v\":\"0.9.0\",\n\"meshes\":{\n";
 	const char kJsonEnd[] = "}\n\"materials\":{\n}\n}";
 
 	// Start
@@ -335,7 +335,7 @@ void WriteMaterialDescToJson(const char* outputTextFilePath, const char* outputB
 	
 	float kDefaultRoughness = 0.2f;
 
-	const char kJsonBegin[] = "{\n\"id\":\"EfwPkg\",\n\"v\":\"0.9.0\",\n\"meshes\":{\n}\n\"materials\":{\n";
+	const char kJsonBegin[] = "\"package\":{\n\"id\":\"EfwPkg\",\n\"v\":\"0.9.0\",\n\"meshes\":{\n}\n\"materials\":{\n";
 	const char kJsonEnd[] = "}\n}";
 
 	//
